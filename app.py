@@ -1,9 +1,5 @@
-# app.py
-# ------------------------------------------------------------------
-# ARAM PS Dashboard + Data-Dragon 아이콘 (개선된 버전)
-# ------------------------------------------------------------------
 import os, ast, requests, re, unicodedata
-from typing import List
+from typing import List, Dict
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -12,53 +8,114 @@ import plotly.express as px
 st.set_page_config(page_title="ARAM PS Dashboard", layout="wide")
 
 # ------------------------------------------------------------------
-# Data-Dragon 동적 매핑 (피드백 적용)
+# 향상된 Data-Dragon 매핑 시스템
 # ------------------------------------------------------------------
 @st.cache_data(show_spinner=False, ttl=86400)
 def ddragon_version()->str:
-    """최신 Data Dragon 버전 자동 감지"""
     try:
         return requests.get("https://ddragon.leagueoflegends.com/api/versions.json", timeout=5).json()[0]
     except:
-        return "14.1.1"  # fallback
+        return "14.1.1"
 
 @st.cache_data(show_spinner=False, ttl=86400)
 def load_dd_maps(ver:str):
-    """Data Dragon에서 모든 매핑 데이터 로드"""
+    """향상된 Data Dragon 매핑 로드"""
     try:
         # Champion 매핑
-        champs = requests.get(f"https://ddragon.leagueoflegends.com/cdn/{ver}/data/en_US/champion.json", timeout=5).json()["data"]
+        champs_response = requests.get(f"https://ddragon.leagueoflegends.com/cdn/{ver}/data/en_US/champion.json", timeout=10)
+        champs = champs_response.json()["data"]
         
-        def norm(s):
+        def normalize_name(s):
+            """이름 정규화 함수"""
+            if not isinstance(s, str):
+                s = str(s)
+            # 유니코드 정규화
             s = unicodedata.normalize("NFKD", s)
-            s = s.replace(" ", "").replace("'", "").replace(".", "")
-            s = s.replace("&", "").replace(":", "")
-            return s
+            # 특수문자 제거
+            s = re.sub(r"[^\w\s]", "", s)
+            # 공백 제거 및 소문자 변환
+            return re.sub(r"\s+", "", s).lower()
         
-        champ_name2file = {cdata["name"]: cdata["id"] + ".png" for cdata in champs.values()}
-        champ_alias = {norm(cdata["name"]).lower(): cdata["id"] + ".png" for cdata in champs.values()}
+        # 챔피언 매핑 생성
+        champ_mappings = {}
+        champ_alias = {}
         
+        for champ_id, champ_data in champs.items():
+            name = champ_data["name"]
+            filename = champ_data["id"] + ".png"
+            
+            # 정확한 이름 매핑
+            champ_mappings[name] = filename
+            
+            # 정규화된 이름 매핑
+            normalized = normalize_name(name)
+            champ_alias[normalized] = filename
+            
+            # 추가 별칭들
+            champ_alias[champ_id.lower()] = filename
+            
         # Items 매핑
-        items = requests.get(f"https://ddragon.leagueoflegends.com/cdn/{ver}/data/en_US/item.json", timeout=5).json()["data"]
-        item_name2id = {v["name"]: k for k, v in items.items()}
+        items_response = requests.get(f"https://ddragon.leagueoflegends.com/cdn/{ver}/data/en_US/item.json", timeout=10)
+        items = items_response.json()["data"]
+        
+        item_mappings = {}
+        item_alias = {}
+        
+        for item_id, item_data in items.items():
+            if "name" in item_data:
+                name = item_data["name"]
+                item_mappings[name] = item_id
+                
+                # 정규화된 이름 매핑
+                normalized = normalize_name(name)
+                item_alias[normalized] = item_id
         
         # Spells 매핑
-        spells = requests.get(f"https://ddragon.leagueoflegends.com/cdn/{ver}/data/en_US/summoner.json", timeout=5).json()["data"]
-        spell_name2key = {v["name"]: v["id"] for v in spells.values()}
+        spells_response = requests.get(f"https://ddragon.leagueoflegends.com/cdn/{ver}/data/en_US/summoner.json", timeout=10)
+        spells = spells_response.json()["data"]
+        
+        spell_mappings = {}
+        spell_alias = {}
+        
+        for spell_key, spell_data in spells.items():
+            name = spell_data["name"]
+            spell_id = spell_data["id"]
+            
+            spell_mappings[name] = spell_id
+            
+            # 정규화된 이름 매핑
+            normalized = normalize_name(name)
+            spell_alias[normalized] = spell_id
+            
+            # 한국어 스펠명 추가 매핑
+            korean_spells = {
+                "flash": "SummonerFlash", "ignite": "SummonerDot", "heal": "SummonerHeal",
+                "barrier": "SummonerBarrier", "exhaust": "SummonerExhaust", 
+                "teleport": "SummonerTeleport", "ghost": "SummonerHaste",
+                "cleanse": "SummonerBoost", "smite": "SummonerSmite",
+                "mark": "SummonerSnowball", "snowball": "SummonerSnowball",
+                "clarity": "SummonerMana"
+            }
+            
+            # 영어 소문자 매핑
+            for eng_name, spell_key in korean_spells.items():
+                spell_alias[eng_name] = spell_key
         
         return {
-            "champ_name2file": champ_name2file, 
-            "champ_alias": champ_alias,
-            "item_name2id": item_name2id, 
-            "spell_name2key": spell_name2key
+            "champ_mappings": champ_mappings, "champ_alias": champ_alias,
+            "item_mappings": item_mappings, "item_alias": item_alias,
+            "spell_mappings": spell_mappings, "spell_alias": spell_alias,
+            "version": ver
         }
+        
     except Exception as e:
-        st.error(f"Data Dragon 로드 실패: {e}")
-        # Fallback 하드코딩 데이터 반환
+        st.error(f"Data Dragon 로드 실패: {str(e)}")
+        # Fallback 데이터
         return {
-            "champ_name2file": {}, "champ_alias": {},
-            "item_name2id": {"Infinity Edge": "3031", "Boots": "1001"},
-            "spell_name2key": {"Flash": "SummonerFlash", "Ignite": "SummonerDot"}
+            "champ_mappings": {}, "champ_alias": {},
+            "item_mappings": {}, "item_alias": {},
+            "spell_mappings": {}, "spell_alias": {},
+            "version": "14.1.1"
         }
 
 # 전역 변수 초기화
@@ -66,31 +123,73 @@ DDRAGON_VERSION = ddragon_version()
 DD = load_dd_maps(DDRAGON_VERSION)
 
 def champion_icon_url(name: str) -> str:
-    """챔피언 아이콘 URL 생성 (동적 매핑)"""
-    key = DD["champ_name2file"].get(name)
-    if not key:
-        n = re.sub(r"[ '&.:]", "", name).lower()
-        key = DD["champ_alias"].get(n)
-    if not key:
-        # 최후 fallback
-        key = re.sub(r"[ '&.:]", "", name)
-        key = key[0].upper() + key[1:] if key else "Aatrox"
-        key += ".png"
-    return f"https://ddragon.leagueoflegends.com/cdn/{DDRAGON_VERSION}/img/champion/{key}"
+    """챔피언 아이콘 URL 생성"""
+    if not name or str(name).strip() == "":
+        return f"https://ddragon.leagueoflegends.com/cdn/{DDRAGON_VERSION}/img/champion/Aatrox.png"
+    
+    name_str = str(name).strip()
+    
+    # 정확한 매핑 시도
+    if name_str in DD["champ_mappings"]:
+        filename = DD["champ_mappings"][name_str]
+        return f"https://ddragon.leagueoflegends.com/cdn/{DDRAGON_VERSION}/img/champion/{filename}"
+    
+    # 정규화된 이름으로 매핑 시도
+    normalized = re.sub(r"[^\w\s]", "", name_str).replace(" ", "").lower()
+    if normalized in DD["champ_alias"]:
+        filename = DD["champ_alias"][normalized]
+        return f"https://ddragon.leagueoflegends.com/cdn/{DDRAGON_VERSION}/img/champion/{filename}"
+    
+    # Fallback: 첫 글자 대문자로 변환
+    fallback_name = re.sub(r"[^\w]", "", name_str)
+    fallback_name = fallback_name[0].upper() + fallback_name[1:] if fallback_name else "Aatrox"
+    return f"https://ddragon.leagueoflegends.com/cdn/{DDRAGON_VERSION}/img/champion/{fallback_name}.png"
 
 def item_icon_url(item: str) -> str:
-    """아이템 아이콘 URL 생성 (동적 매핑)"""
-    iid = DD["item_name2id"].get(item)
-    if not iid:
-        return f"https://ddragon.leagueoflegends.com/cdn/{DDRAGON_VERSION}/img/item/1001.png"  # fallback
-    return f"https://ddragon.leagueoflegends.com/cdn/{DDRAGON_VERSION}/img/item/{iid}.png"
+    """아이템 아이콘 URL 생성 (디버깅 포함)"""
+    if not item or str(item).strip() == "" or str(item).strip() == "0":
+        return f"https://ddragon.leagueoflegends.com/cdn/{DDRAGON_VERSION}/img/item/1001.png"
+    
+    item_str = str(item).strip()
+    
+    # 정확한 매핑 시도
+    if item_str in DD["item_mappings"]:
+        item_id = DD["item_mappings"][item_str]
+        return f"https://ddragon.leagueoflegends.com/cdn/{DDRAGON_VERSION}/img/item/{item_id}.png"
+    
+    # 정규화된 이름으로 매핑 시도
+    normalized = re.sub(r"[^\w\s]", "", item_str).replace(" ", "").lower()
+    if normalized in DD["item_alias"]:
+        item_id = DD["item_alias"][normalized]
+        return f"https://ddragon.leagueoflegends.com/cdn/{DDRAGON_VERSION}/img/item/{item_id}.png"
+    
+    # 디버깅: 매핑 실패한 아이템 출력
+    if st.session_state.get('debug_mode', False):
+        st.write(f"매핑 실패한 아이템: '{item_str}'")
+    
+    # Fallback
+    return f"https://ddragon.leagueoflegends.com/cdn/{DDRAGON_VERSION}/img/item/1001.png"
 
 def spell_icon_url(spell: str) -> str:
-    """스펠 아이콘 URL 생성 (동적 매핑)"""
-    skey = DD["spell_name2key"].get(spell.strip())
-    if not skey:
-        skey = "SummonerFlash"  # fallback
-    return f"https://ddragon.leagueoflegends.com/cdn/{DDRAGON_VERSION}/img/spell/{skey}.png"
+    """스펠 아이콘 URL 생성"""
+    if not spell or str(spell).strip() == "":
+        return f"https://ddragon.leagueoflegends.com/cdn/{DDRAGON_VERSION}/img/spell/SummonerFlash.png"
+    
+    spell_str = str(spell).strip()
+    
+    # 정확한 매핑 시도
+    if spell_str in DD["spell_mappings"]:
+        spell_id = DD["spell_mappings"][spell_str]
+        return f"https://ddragon.leagueoflegends.com/cdn/{DDRAGON_VERSION}/img/spell/{spell_id}.png"
+    
+    # 정규화된 이름으로 매핑 시도
+    normalized = spell_str.lower()
+    if normalized in DD["spell_alias"]:
+        spell_id = DD["spell_alias"][normalized]
+        return f"https://ddragon.leagueoflegends.com/cdn/{DDRAGON_VERSION}/img/spell/{spell_id}.png"
+    
+    # Fallback
+    return f"https://ddragon.leagueoflegends.com/cdn/{DDRAGON_VERSION}/img/spell/SummonerFlash.png"
 
 # ------------------------------------------------------------------
 # CSV 로더 (기존 로직 유지)
@@ -147,9 +246,14 @@ def load_df(buf) -> pd.DataFrame:
     return df
 
 # ------------------------------------------------------------------
-# 사이드바 & 데이터 로드
+# 메인 앱
 # ------------------------------------------------------------------
 st.sidebar.header("⚙️ 설정")
+
+# 디버깅 모드 토글
+debug_mode = st.sidebar.checkbox("🐛 디버깅 모드", value=False)
+st.session_state['debug_mode'] = debug_mode
+
 auto = _discover_csv()
 st.sidebar.write("🔍 자동 검색:", auto if auto else "없음")
 up = st.sidebar.file_uploader("CSV 업로드(선택)", type="csv")
@@ -161,6 +265,13 @@ if df is None:
 
 champions = sorted(df["champion"].dropna().unique())
 sel = st.sidebar.selectbox("🎯 챔피언 선택", champions)
+
+# 디버깅 정보 표시
+if debug_mode:
+    st.sidebar.subheader("🔍 디버깅 정보")
+    st.sidebar.write(f"Data Dragon 버전: {DDRAGON_VERSION}")
+    st.sidebar.write(f"로드된 아이템 수: {len(DD['item_mappings'])}")
+    st.sidebar.write(f"로드된 스펠 수: {len(DD['spell_mappings'])}")
 
 # ------------------------------------------------------------------
 # 헤더 & 메트릭
@@ -175,10 +286,10 @@ avg_dpm = round(dfc["dpm"].mean(),1)
 
 st.title("🏆 ARAM Analytics")
 
-# 챔피언 아이콘 표시 (URL 직접 렌더링)
+# 챔피언 아이콘 표시
 mid = st.columns([2,3,2])[1]
 with mid:
-    st.image(champion_icon_url(sel), width=100)  # ← PIL 제거, URL 직접 사용
+    st.image(champion_icon_url(sel), width=100)
     st.subheader(sel, divider=False)
 
 m1,m2,m3,m4,m5 = st.columns(5)
@@ -202,53 +313,91 @@ with tab1:
 with tab2:
     left, right = st.columns(2)
     
-    # 아이템 섹션 (안정화된 렌더링 적용)
+    # 아이템 섹션 (개선된 데이터 처리)
     with left:
         st.subheader("🛡️ 아이템 성과")
-        item_cols = [c for c in dfc if c.startswith("item")]
-        rec = pd.concat([dfc[["matchId","win_clean",c]].rename(columns={c:"item"}) for c in item_cols])
-        g = (rec[rec["item"]!=""]
-             .groupby("item").agg(total=("matchId","count"), wins=("win_clean","sum"))
-             .assign(win_rate=lambda d:(d.wins/d.total*100).round(2))
-             .sort_values(["total","win_rate"],ascending=[False,False]).head(10).reset_index())
+        item_cols = [c for c in dfc.columns if c.startswith("item")]
         
-        # 컨테이너 기반 안정화된 렌더링
-        for i, r in g.reset_index(drop=True).iterrows():
-            block = st.container()  # 각 행마다 고유 컨테이너
-            c_icon, c_name, c_pick, c_wr = block.columns([1,4,2,2])
+        if item_cols:
+            # 아이템 데이터 재구성 (Series 객체 문제 해결)
+            item_data = []
+            for col in item_cols:
+                for idx, row in dfc.iterrows():
+                    item_name = row[col]
+                    if item_name and str(item_name).strip() not in ["", "0", "nan"]:
+                        item_data.append({
+                            'matchId': row.get('matchId', idx),
+                            'win_clean': row['win_clean'],
+                            'item': str(item_name).strip()
+                        })
             
-            with c_icon: 
-                st.image(item_icon_url(str(r.item)), width=32)  # URL 직접 사용
-            with c_name: 
-                st.write(str(r.item))
-            with c_pick: 
-                st.write(f"{int(r.total)} 게임")
-            with c_wr: 
-                st.write(f"{r.win_rate}%")
-            st.divider()
+            if item_data:
+                item_df = pd.DataFrame(item_data)
+                g = (item_df.groupby("item")
+                     .agg(total=("matchId","count"), wins=("win_clean","sum"))
+                     .assign(win_rate=lambda d:(d.wins/d.total*100).round(2))
+                     .sort_values(["total","win_rate"], ascending=[False,False])
+                     .head(10)
+                     .reset_index())
+                
+                # 안정화된 렌더링
+                for i, row in g.iterrows():
+                    block = st.container()
+                    c_icon, c_name, c_pick, c_wr = block.columns([1,4,2,2])
+                    
+                    item_name = str(row['item'])
+                    
+                    with c_icon: 
+                        st.image(item_icon_url(item_name), width=32)
+                    with c_name: 
+                        st.write(item_name)
+                    with c_pick: 
+                        st.write(f"{int(row['total'])} 게임")
+                    with c_wr: 
+                        st.write(f"{row['win_rate']}%")
+                    
+                    # 디버깅 정보
+                    if debug_mode:
+                        st.caption(f"매핑: {item_name} -> {item_icon_url(item_name)}")
+                    
+                    st.divider()
+            else:
+                st.write("아이템 데이터가 없습니다.")
+        else:
+            st.write("아이템 컬럼을 찾을 수 없습니다.")
     
-    # 스펠 섹션 (안정화된 렌더링 적용)
+    # 스펠 섹션
     with right:
         st.subheader("✨ 스펠 조합")
         sp = (dfc.groupby("spell_combo")
               .agg(games=("matchId","count"), wins=("win_clean","sum"))
               .assign(win_rate=lambda d:(d.wins/d.games*100).round(2))
-              .sort_values(["games","win_rate"],ascending=[False,False]).head(8).reset_index())
+              .sort_values(["games","win_rate"], ascending=[False,False])
+              .head(8)
+              .reset_index())
         
-        for i, r in sp.reset_index(drop=True).iterrows():
-            block = st.container()  # 각 행마다 고유 컨테이너
-            spell_parts = str(r.spell_combo).split("+")
-            s1, s2 = [s.strip() for s in spell_parts] if len(spell_parts) >= 2 else [spell_parts[0].strip(), ""]
+        for i, row in sp.iterrows():
+            block = st.container()
+            spell_parts = str(row['spell_combo']).split("+")
+            s1 = spell_parts[0].strip() if len(spell_parts) > 0 else ""
+            s2 = spell_parts[1].strip() if len(spell_parts) > 1 else ""
             
             col_i, col_n, col_v = block.columns([2,3,2])
+            
             with col_i:
-                st.image(spell_icon_url(s1), width=28)  # URL 직접 사용
+                if s1:
+                    st.image(spell_icon_url(s1), width=28)
                 if s2:
-                    st.image(spell_icon_url(s2), width=28)  # URL 직접 사용
+                    st.image(spell_icon_url(s2), width=28)
             with col_n: 
-                st.write(str(r.spell_combo))
+                st.write(str(row['spell_combo']))
             with col_v: 
-                st.write(f"{r.win_rate}%\n{int(r.games)}G")
+                st.write(f"{row['win_rate']}%\n{int(row['games'])}G")
+            
+            # 디버깅 정보
+            if debug_mode:
+                st.caption(f"스펠: {s1} + {s2}")
+            
             st.divider()
 
 with tab3:
